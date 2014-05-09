@@ -31,6 +31,11 @@ HOUSE_THRES = .9
 
 def main(argv):
 
+    do_filter = False
+
+    if len(argv) > 0 and argv[0] == 'Filter':
+        do_filter = True
+
     # get list of json files
     files_list = glob.glob("2014/*/*.json")
     #files_list = ['2014/h12/data.json']
@@ -44,7 +49,7 @@ def main(argv):
     os.makedirs("house")
 
     #just creates the nodes
-    G_senate, G_house = load_congress("legislators-current.csv")
+    id_dict, G_senate, G_house = load_congress("legislators-current.csv")
 
     #now create the edges
     for fname in files_list:
@@ -58,49 +63,77 @@ def main(argv):
 
                     for vt in data['votes']:
                             
-                        node_ids = [n['id'] for n in data['votes'][vt]]
+                        congress_ids = [n['id'] for n in data['votes'][vt]]
                         
-                        pairs = itertools.permutations(node_ids,2)
+                        pairs = itertools.permutations(congress_ids,2)
                         
                         #assumes lists are always alphabetical so that pairs will only occur in one direction
                         for u, v in pairs:
-                           
-                            if G.has_edge(u, v):
-                                G[u][v]['weight']+=1
-                            else:
-                                G.add_edge(u, v, weight=1)
+                            
+                            try:
+                                x = id_dict[u]
+                                y = id_dict[v]
+                            except KeyError as e:
+                                #TODO: there are many congress IDs not in the legistature file... not sure why
+                                continue
 
-     
+                            if G.has_edge(x, y):
+                                G[x][y]['weight']+=1
+                            else:
+                                G.add_edge(x, y, weight=1)
+
+    if do_filter:
+        for u, v, d in G_senate.edges(data=True):
+            if d['weight'] < 160:
+                #we filter out edges based on our filter settings (in the case 160)
+                G.remove_edge(u,v)
+
+
     nx.write_graphml(G_senate, "senate/senate.graphml")
     nx.write_graphml(G_house, "house/house.graphml") 
-
+    write_node_list(G_senate, "senate/senate_nodes.txt")
+    write_node_list(G_house, "house/house_nodes.txt")
     
+
+def write_node_list(G, out):
+    with open(out, 'w') as f:
+        
+        csvwriter = csv.writer(f, delimiter="\t", quoting=csv.QUOTE_ALL)
+        for n,d in G.nodes(data=True):
+            if 'party' in d and 'name' in d:
+                csvwriter.writerow((n, d['name'].encode('utf-8'), d['party']))
+             
 
 def load_congress(congress_file):
  
     G_senate = nx.Graph()
     G_house = nx.Graph()
-
+    id_dict = {}
+    next_id = 0
     with open(congress_file, 'r') as f:
     
         csvreader = csv.reader(f,delimiter=',',quotechar='"')
         #skip the headers
         next(csvreader, None)  # skip the headers
         for row in csvreader:
+                  
             
-          
             if row[4] == "sen":
-                node_id = row[20]
+                congress_id = row[20]
+                id_dict[congress_id] = next_id
                 G = G_senate
             elif row[4] == "rep":
-                node_id = row[17]
+                congress_id = row[17]
+                id_dict[congress_id] = next_id
                 G = G_house
             else:
                 continue
+                   
+            G.add_node(next_id, native_id=congress_id, name="{} {}".format(row[1],row[0]).decode('utf-8'), party=row[6], state=row[5])
+            
+            next_id+=1
 
-            G.add_node(node_id, name="{} {}".format(row[1],row[0]).decode('utf-8'), party=row[6], state=row[5])
-
-    return G_senate, G_house
+    return id_dict, G_senate, G_house
 
 
 if __name__ == "__main__":
